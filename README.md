@@ -1,6 +1,8 @@
 # 🦭 川柳検出オットセイ (FindSenryu4LINE)
 
-<img src="./icon.png" alt="川柳検出オットセイ" width="160" />
+<p align="center">
+  <img src="./icon.png" alt="川柳検出オットセイ" width="160" />
+</p>
 
 LINEで受け取ったメッセージを形態素解析し、五・七・五（川柳・俳句）、
 五・七・五・七・七（短歌）、五・七の繰り返し＋五・七・七（長歌）を検出して
