@@ -1,0 +1,8 @@
+**/**
+!appsscript.json
+!Code.gs
+!*.gs
+!*.js
+.git/**
+.gitignore
+node_modules/**
