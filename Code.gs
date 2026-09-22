@@ -429,18 +429,36 @@ function endsWithDanglingSokuon(token) {
 /* ============================================================
  * 文の区切り（境界）判定
  *
- * 改行や、絵文字・記号の連続（Wordleの■□マスなど）は
- * メッセージ内の別々の話題・行を区切っていることが多い。
+ * 絵文字・記号・改行の連続（Wordleの■□マスや
+ * 顔文字、URLなど）はメッセージ内の別々の話題を
+ * 区切っていることが多い。
  *
  * これをまたいで川柳・短歌を探してしまうと、
  * 「第1168回」の「回」と「お題：ぜじいうみゅん」の「お題」が
  * つながってしまうような、無関係な単語同士の誤検出が起きる。
  *
- * そのため、改行・絵文字・（句読点以外の）記号は
- * 「越えてはいけない境界」として扱い、そこで探索を打ち切る。
+ * その一方で、
+ *
+ *   奥山にもみじ🍁踏み分け鳴く鹿の
+ *
+ * のように単体の絵文字が1つ文中に挟まるだけ、
+ * あるいは
+ *
+ *   古池や
+ *   蛙飛び込む
+ *   水の音
+ *
+ * のように句ごとに1回だけ改行するのは、
+ * どちらもごく自然な文として成立している。
+ *
+ * つまり、絵文字や記号、改行が「単体で一つ」現れる
+ * 程度なら自然な文の一部として許容し、
+ * それが（2つ以上）まとまって連続するときだけ、
+ * Wordleのマスや顔文字、URLのような
+ * 「越えてはいけない境界」として扱う。
  *
  * 一方、「、」「。」「・」「ー」などの一般的な句読点は
- * 文中に挟まっても自然なので境界にしない。
+ * いくつ連なっても自然なので境界にしない。
  * ============================================================ */
 
 // 詩の途中に挟まっても区切りにしない記号。
@@ -450,37 +468,86 @@ const SOFT_PUNCTUATION = new Set([
   ' ', '　', '\t'
 ]);
 
-function isHardBreakToken(token) {
+/*
+ * モーラを持たない（読まない）形態素の中で、
+ * 「区切りとして重みを持つ文字（改行・絵文字・
+ * 許可していない記号）がいくつあるかを数える。
+ */
+function computeBreakWeight(token) {
   const surface = String(token?.surface || '');
 
-  if (!surface) {
-    return false;
+  if (!surface || token.mora > 0) {
+    return 0;
   }
 
-  // 改行は明確な区切り
-  if (/[\r\n\u2028\u2029]/.test(surface)) {
-    return true;
-  }
-
-  // モーラを持つ（読み上げられる）形態素は区切りにしない
-  if (token.mora > 0) {
-    return false;
-  }
+  let weight = 0;
 
   for (const ch of surface) {
 
-    // 絵文字（🟩⬜🐝🦭⬆️など）は区切り
-    if (/\p{Extended_Pictographic}/u.test(ch)) {
-      return true;
+    // 改行
+    if (/[\r\n\u2028\u2029]/.test(ch)) {
+      weight++;
+      continue;
     }
 
-    // 許可した句読点以外の記号（顔文字・URLの記号など）は区切り
+    // 絵文字（🟩⬜🐝🦭⬆️など）
+    if (/\p{Extended_Pictographic}/u.test(ch)) {
+      weight++;
+      continue;
+    }
+
+    // 許可した句読点以外の記号（顔文字・URLの記号など）
     if (!SOFT_PUNCTUATION.has(ch)) {
-      return true;
+      weight++;
     }
   }
 
-  return false;
+  return weight;
+}
+
+/*
+ * 改行・絵文字・記号のラン（モーラが0の形態素が
+ * 連続する区間）ごとに重みを合計し、
+ * 合計2以上（つまり単体ではない）のランだけを
+ * 「越えてはいけない境界（hardBreak）」としてマーキングする。
+ */
+function markHardBreaks(tokens) {
+  const result = tokens.map(token => ({ ...token, hardBreak: false }));
+
+  let runStart = null;
+  let runWeight = 0;
+
+  const closeRun = (endExclusive) => {
+    if (runStart === null) {
+      return;
+    }
+
+    if (runWeight >= 2) {
+      for (let k = runStart; k < endExclusive; k++) {
+        result[k].hardBreak = true;
+      }
+    }
+
+    runStart = null;
+    runWeight = 0;
+  };
+
+  for (let i = 0; i < result.length; i++) {
+    if (result[i].mora === 0) {
+      if (runStart === null) {
+        runStart = i;
+      }
+
+      runWeight += computeBreakWeight(result[i]);
+
+    } else {
+      closeRun(i);
+    }
+  }
+
+  closeRun(result.length);
+
+  return result;
 }
 
 
@@ -510,11 +577,12 @@ function findPattern(tokens, targets) {
       const token = tokens[i];
 
       /*
-       * 改行・絵文字・記号列などの境界をまたいで
-       * 探索を続けると無関係な文がつながってしまうので、
-       * この開始位置での探索はここで打ち切る。
+       * 改行・絵文字・記号のランが2以上まとまって
+       * 連続する「hardBreak」のときだけ、この開始位置での
+       * 探索を打ち切る。単体の絵文字・単体の改行などは
+       * 自然な文の一部として許容し、ここでは打ち切らない。
        */
-      if (isHardBreakToken(token)) {
+      if (token.hardBreak) {
         break;
       }
 
@@ -572,13 +640,13 @@ function findPattern(tokens, targets) {
 
       /*
        * 次の有音形態素を探す。
-       * 途中に改行・絵文字などの境界があれば、
-       * それをまたいで次句を始めない。
+       * hardBreak（改行・絵文字・記号のランが2以上）な境界が
+       * あれば、それをまたいで次句を始めない。
        */
       let next = null;
 
       for (let j = i + 1; j < tokens.length; j++) {
-        if (isHardBreakToken(tokens[j])) {
+        if (tokens[j].hardBreak) {
           break;
         }
 
@@ -666,7 +734,7 @@ function detectPoetry(text) {
   /*
    * Yahoo APIは一度しか呼ばない。
    */
-  const tokens = addMoraInfo(analyzeUnidic(text));
+  const tokens = markHardBreaks(addMoraInfo(analyzeUnidic(text)));
 
   /*
    * ★ 必ず長い形式から。
