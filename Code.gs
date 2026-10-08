@@ -34,27 +34,37 @@ function doPost(e) {
 
     for (const event of body.events || []) {
 
-      // テキストメッセージ以外は無視
-      if (event.type !== 'message' || event.message?.type !== 'text') {
-        continue;
+      /*
+       * 1イベントの失敗（Yahoo APIのエラーなど）で
+       * 残りのイベントが処理されなくなるのを防ぐ。
+       */
+      try {
+
+        // テキストメッセージ以外は無視
+        if (event.type !== 'message' || event.message?.type !== 'text') {
+          continue;
+        }
+
+        const text = event.message.text;
+
+        console.log(`受信: ${text}`);
+
+        const result = detectPoetry(text);
+
+        if (!result.found) {
+          console.log('詩形なし');
+          continue;
+        }
+
+        console.log(`${result.name}検出: ` + result.poem.lines.join(' / '));
+
+        const reply = createPoetryReply(result);
+
+        replyLine(event.replyToken, reply);
+
+      } catch (error) {
+        console.error(`イベント処理エラー: ${error.stack || error}`);
       }
-
-      const text = event.message.text;
-
-      console.log(`受信: ${text}`);
-
-      const result = detectPoetry(text);
-
-      if (!result.found) {
-        console.log('詩形なし');
-        continue;
-      }
-
-      console.log(`${result.name}検出: ` + result.poem.lines.join(' / '));
-
-      const reply = createPoetryReply(result);
-
-      replyLine(event.replyToken, reply);
     }
 
   } catch (error) {
@@ -871,6 +881,8 @@ function setupKigoDb() {
 
   if (oldFileId) {
     try {
+      const file = DriveApp.getFileById(oldFileId);
+
       file.setContent(json);
 
       // 書き込み後に少し待つ
